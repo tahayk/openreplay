@@ -8,13 +8,13 @@ import { useStore } from 'App/mstore';
 import { useHistory, useLocation } from 'App/routing';
 import { NoPermission } from 'UI';
 
+import PreferencesPage from '../PreferencesPage';
 import {
   useNotifications,
   useSettings,
   useUpdateNotifications,
   useUpdateSettings,
-} from '../KaiSettings/queries';
-import PreferencesPage from '../PreferencesPage';
+} from '../SmartTests/queries';
 import CriticalRules from './CriticalRules';
 import JourneyTags from './JourneyTags';
 

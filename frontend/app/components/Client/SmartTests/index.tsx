@@ -17,7 +17,7 @@ import { KaiTab, kaiUi, useKaiUi } from './components/shared/uiStore';
 import { useQueryParam } from './components/shared/useUrlState';
 import { BrowserTestsProjectProvider } from './queries';
 
-function KaiSettings() {
+function SmartTests() {
   const { t } = useTranslation();
   const { projectsStore } = useStore();
   const history = useHistory();
@@ -101,5 +101,5 @@ function KaiSettings() {
 }
 
 export default withPageTitle('Test Agents - OpenReplay')(
-  withPermissions(['BROWSER_TESTS'], '')(observer(KaiSettings)),
+  withPermissions(['BROWSER_TESTS'], '')(observer(SmartTests)),
 );

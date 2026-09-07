@@ -1,7 +1,12 @@
 import { TFunction } from 'i18next';
 import React from 'react';
 
-import { agentsEnabled, menuHidden } from 'App/utils/split-utils';
+import {
+  agentIssuesEnabled,
+  agentTestsEnabled,
+  anyAgentEnabled,
+  menuHidden,
+} from 'App/utils/split-utils';
 
 import { IconNames } from '../components/ui/SVG';
 
@@ -106,7 +111,7 @@ export const categories: (t: TFunction) => Category[] = (t) => [
   {
     title: t('Agents'),
     key: 'agents',
-    hidden: !agentsEnabled(),
+    hidden: !anyAgentEnabled(),
     items: [
       {
         label: t('Agents'),
@@ -116,10 +121,18 @@ export const categories: (t: TFunction) => Category[] = (t) => [
           label: t('New'),
           color: '#394DFE',
         },
-        hidden: !agentsEnabled(),
+        hidden: !anyAgentEnabled(),
         children: [
-          { label: t('Issues'), key: MENU.ISSUES },
-          { label: t('Tests'), key: MENU.TEST_AGENTS },
+          {
+            label: t('Issues'),
+            key: MENU.ISSUES,
+            hidden: !agentIssuesEnabled(),
+          },
+          {
+            label: t('Tests'),
+            key: MENU.TEST_AGENTS,
+            hidden: !agentTestsEnabled(),
+          },
         ],
       },
     ],
@@ -259,12 +272,11 @@ export const preferences: (t: TFunction) => Category[] = (t) => [
       {
         // shared preferences for the agents: journey tags, critical rules,
         // notifications by category + behaviour toggles. Core config
-        // (environments, run defaults) stays with each agent's page. Gated
-        // behind the same flag as the rest of the Agents section.
+        // (environments, run defaults) stays with each agent's page.
         label: t('Agents'),
         key: PREFERENCES_MENU.AGENTS,
         icon: 'scan-pulse',
-        hidden: !agentsEnabled(),
+        hidden: !anyAgentEnabled(),
       },
     ],
   },

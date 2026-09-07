@@ -1,20 +1,26 @@
 /**
  * can be overwritten in saas or ee editions
  * */
+import userStore from 'App/mstore/userStore';
+
+/** feature keys the backend returns in `/account` -> `plan.features` */
+export type PlanFeature = 'agent-issues' | 'agent-tests';
+
+export const hasPlanFeature = (feature: PlanFeature): boolean =>
+  userStore.account?.plan?.features?.includes(feature) ?? false;
 
 /**
- * Feature flag for the AI "agents" surface: the Smart Issues pages, the agent
- * settings tab, and the "Issues Agent" capture column on segments / saved
- * searches. Toggle via localStorage `__test_agents__`; hard-code the return
- * (e.g. `return true`) to force it on/off everywhere.
+ * Smart Issues pages + the agentic parts of segments / saved searches
+ * (capture toggle, agent instructions, "Issues Agent" column).
  */
-export const agentsEnabled = (): boolean => {
-  try {
-    return window.localStorage.getItem('__test_agents__') === 'true';
-  } catch {
-    return false;
-  }
-};
+export const agentIssuesEnabled = (): boolean => hasPlanFeature('agent-issues');
+
+/** Test agent: the Tests page and its settings tab (SmartTests). */
+export const agentTestsEnabled = (): boolean => hasPlanFeature('agent-tests');
+
+/** Surfaces shared by both agents: the Agents menu section and its preferences tab. */
+export const anyAgentEnabled = (): boolean =>
+  agentIssuesEnabled() || agentTestsEnabled();
 
 export const hasAi = false;
 export const hasHealth = true;

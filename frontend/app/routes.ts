@@ -158,8 +158,6 @@ export const spot = (id = ':spotId', hash?: string | number): string =>
 
 export const highlights = (): string => '/highlights';
 
-export const testAgents = (): string => '/test-agents';
-
 export const mcpAuthorize = (): string => '/mcp/authorize';
 export const dataManagement = {
   activity: () => '/data-management/activity',
@@ -209,8 +207,6 @@ const REQUIRED_SITE_ID_ROUTES = [
   onboarding(''),
 
   highlights(),
-
-  testAgents(),
 
   dataManagement.activity(),
   dataManagement.userPage(''),

@@ -4,7 +4,7 @@ import { PANEL_SIZES } from 'App/constants/panelSizes';
 import { client as clientRoute } from 'App/routes';
 import { Navigate, withRouter } from 'App/routing';
 import { CLIENT_TABS } from 'App/utils/routeUtils';
-import { agentsEnabled } from 'App/utils/split-utils';
+import { agentTestsEnabled, anyAgentEnabled } from 'App/utils/split-utils';
 import Modules from 'Components/Client/Modules';
 import SessionsListingSettings from 'Components/Client/SessionsListingSettings';
 
@@ -15,11 +15,11 @@ import ClientSaas from './ClientSaas';
 import CustomFields from './CustomFields';
 import ExportedVideosList from './ExportedVideos/ExportedVideosList';
 import Integrations from './Integrations';
-import KaiSettings from './KaiSettings';
 import Notifications from './Notifications';
 import ProfileSettings from './ProfileSettings';
 import Projects from './Projects';
 import Roles from './Roles';
+import SmartTests from './SmartTests';
 import UserView from './Users/UsersView';
 import Webhooks from './Webhooks';
 
@@ -57,7 +57,7 @@ class Client extends React.PureComponent<any> {
       case CLIENT_TABS.AUDIT:
         return <AuditView />;
       case CLIENT_TABS.AGENTS:
-        return agentsEnabled() ? (
+        return anyAgentEnabled() ? (
           <AgentsPreferences />
         ) : (
           <Navigate to={clientRoute(CLIENT_TABS.PROFILE)} replace />
@@ -67,7 +67,11 @@ class Client extends React.PureComponent<any> {
       case CLIENT_TABS.VIDEOS:
         return <ExportedVideosList />;
       case CLIENT_TABS.TEST_AGENTS:
-        return <KaiSettings />;
+        return agentTestsEnabled() ? (
+          <SmartTests />
+        ) : (
+          <Navigate to={clientRoute(CLIENT_TABS.PROFILE)} replace />
+        );
       default:
         return <ClientSaas activeTab={activeTab} />;
     }

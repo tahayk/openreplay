@@ -1,6 +1,7 @@
 import { IMember } from 'Types/member';
 import { DateTime } from 'luxon';
 import { makeAutoObservable } from 'mobx';
+
 import Limit, { ILimits } from './limit';
 
 export interface IAccountAlert {
@@ -8,6 +9,13 @@ export interface IAccountAlert {
   level?: string;
   button?: string;
   url?: string;
+}
+
+export interface IAccountPlan {
+  type?: string;
+  /** gated features, e.g. 'agent-issues' | 'agent-tests' (see utils/split-utils) */
+  features?: string[];
+  [key: string]: any;
 }
 
 export interface IAccount extends IMember {
@@ -30,6 +38,7 @@ export interface IAccount extends IMember {
   optOut: string;
   versionNumber: string;
   alerts?: IAccountAlert[];
+  plan?: IAccountPlan;
 }
 
 export default class Account {
@@ -53,6 +62,7 @@ export default class Account {
   optOut: boolean;
   versionNumber: string;
   alerts?: IAccountAlert[];
+  plan?: IAccountPlan;
   tenantId: string;
   name: string;
   createdAt: DateTime;
@@ -97,6 +107,7 @@ export default class Account {
     edition: this.edition,
     optOut: this.optOut,
     versionNumber: this.versionNumber,
+    plan: this.plan,
     name: this.name,
     createdAt: this.createdAt,
     admin: this.admin,

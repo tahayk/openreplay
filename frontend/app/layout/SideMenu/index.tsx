@@ -16,6 +16,7 @@ import {
 import { useLocation, useNavigate } from 'App/routing';
 // added: util-based mobile detection
 import { mobileScreen } from 'App/utils/isMobile';
+import { agentIssuesEnabled, agentTestsEnabled } from 'App/utils/split-utils';
 import { MODULES } from 'Components/Client/Modules/extra';
 
 import {
@@ -50,6 +51,10 @@ function SideMenu(props: Props) {
   // added: call util once per render
   const isMobile = mobileScreen;
   const { t, i18n } = useTranslation();
+
+  // plan features land with /account, so the memo has to recompute once they do
+  const hasIssuesAgent = agentIssuesEnabled();
+  const hasTestsAgent = agentTestsEnabled();
 
   const menu: any[] = React.useMemo(() => {
     const sourceMenu = isPreferencesActive ? preferences(t) : main_menu(t);
@@ -91,6 +96,8 @@ function SideMenu(props: Props) {
     siteId,
     i18n.language,
     isMobile, // added dep
+    hasIssuesAgent,
+    hasTestsAgent,
   ]);
 
   const menuRoutes: any = {
@@ -118,7 +125,6 @@ function SideMenu(props: Props) {
     [PREFERENCES_MENU.BILLING]: () => client(CLIENT_TABS.BILLING),
     [PREFERENCES_MENU.MODULES]: () => client(CLIENT_TABS.MODULES),
     [MENU.HIGHLIGHTS]: () => withSiteId(routes.highlights(), siteId),
-    [MENU.TEST_AGENTS]: () => withSiteId(routes.testAgents(), siteId),
     [PREFERENCES_MENU.EXPORTED_VIDEOS]: () => client(CLIENT_TABS.VIDEOS),
     [PREFERENCES_MENU.TEST_AGENTS]: () => client(CLIENT_TABS.TEST_AGENTS),
     [MENU.ACTIVITY]: () => withSiteId(routes.dataManagement.activity(), siteId),

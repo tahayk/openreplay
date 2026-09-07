@@ -20,7 +20,7 @@ import { toast } from 'react-toastify';
 
 import { useStore } from 'App/mstore';
 import { sessions } from 'App/routes';
-import { agentsEnabled } from 'App/utils/split-utils';
+import { agentIssuesEnabled } from 'App/utils/split-utils';
 import SimpleEmptyImage from 'Components/DataManagement/SimpleEmptyImage';
 import { CopyButton, TextEllipsis } from 'UI';
 
@@ -237,7 +237,7 @@ function SegmentsList({
   );
 
   // the "Issues Agent" capture column is agentic — hide it behind the flag
-  const visibleColumns = agentsEnabled()
+  const visibleColumns = agentIssuesEnabled()
     ? columns
     : columns?.filter((c) => c.key !== 'capture');
 

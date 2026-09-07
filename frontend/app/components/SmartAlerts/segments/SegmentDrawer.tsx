@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 
 import { useStore } from 'App/mstore';
-import { agentsEnabled } from 'App/utils/split-utils';
+import { agentIssuesEnabled } from 'App/utils/split-utils';
 
 import SessionFilters from 'Shared/SessionFilters';
 
@@ -34,7 +34,7 @@ function SegmentDrawer({ open, segment, source, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const fromIssues = source === 'issues';
   // the capture toggle + agent instructions are agentic — gate behind the flag
-  const showAgent = agentsEnabled();
+  const showAgent = agentIssuesEnabled();
   // teammates' segments open read-only; anyone still toggles capture from the
   // list, just not the query
   const readOnly = Boolean(segment && !segment.mine);

@@ -31,9 +31,6 @@ const components: any = {
   SpotsListPure: lazy(() => import('Components/Spots/SpotsList')),
   SpotPure: lazy(() => import('Components/Spots/SpotPlayer')),
   HighlightsPure: lazy(() => import('Components/Highlights/HighlightsList')),
-  TestAgentsPure: lazy(
-    () => import('Components/Client/KaiSettings/StandalonePage'),
-  ),
   ActivityPure: lazy(
     () => import('Components/DataManagement/Activity/ActivityPage'),
   ),
@@ -67,7 +64,6 @@ const enhancedComponents: any = {
   SpotsList: withSiteIdUpdater(components.SpotsListPure),
   Spot: components.SpotPure,
   Highlights: withSiteIdUpdater(components.HighlightsPure),
-  TestAgents: withSiteIdUpdater(components.TestAgentsPure),
   ScopeSetup: components.ScopeSetup,
   Activity: withSiteIdUpdater(components.ActivityPure),
   UserPage: withSiteIdUpdater(components.UserPage),
@@ -112,12 +108,10 @@ const SPOTS_LIST_PATH = routes.spotsList();
 const SPOT_PATH = routes.spot();
 
 const HIGHLIGHTS_PATH = routes.highlights();
-const TEST_AGENTS_PATH = routes.testAgents();
 
-/* Wrapped once at module scope: doing it in render gave React a new component
-   type on every re-render, remounting the route and refetching its data. */
 const SAAS_ROUTES = saasRoutes.map((route) => ({
   path: route.path,
+  enabled: route.enabled,
   Component: withSiteIdUpdater(route.component),
 }));
 
@@ -360,10 +354,6 @@ function PrivateRoutes() {
           path={withSiteId(HIGHLIGHTS_PATH, siteIdList)}
           element={<enhancedComponents.Highlights />}
         />
-        <Route
-          path={withSiteId(TEST_AGENTS_PATH, siteIdList)}
-          element={<enhancedComponents.TestAgents />}
-        />
 
         <Route
           path={withSiteId(`${SESSIONS_PATH}/*`, siteIdList)}
@@ -421,13 +411,15 @@ function PrivateRoutes() {
         {Object.entries(routes.redirects).map(([fr, to]) => (
           <Route key={fr} path={fr} element={<Navigate to={to} replace />} />
         ))}
-        {SAAS_ROUTES.map(({ path, Component }) => (
-          <Route
-            key={path}
-            path={withSiteId(path, siteIdList)}
-            element={<Component />}
-          />
-        ))}
+        {SAAS_ROUTES.filter((route) => route.enabled()).map(
+          ({ path, Component }) => (
+            <Route
+              key={path}
+              path={withSiteId(path, siteIdList)}
+              element={<Component />}
+            />
+          ),
+        )}
         <Route path="*" element={<Navigate to={fallbackTo} replace />} />
       </StableRoutes>
     </Suspense>
