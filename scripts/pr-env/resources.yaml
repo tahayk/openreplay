@@ -30,10 +30,6 @@ assist:
   resources:
     requests:
       cpu: 50m
-assist-stats:
-  resources:
-    requests:
-      cpu: 50m
 chalice:
   resources:
     requests:

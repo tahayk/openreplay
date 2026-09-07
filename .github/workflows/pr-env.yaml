@@ -282,7 +282,6 @@ jobs:
             build_and_deploy "frontend"
             build_and_deploy "chalice"
             build_and_deploy "sourcemapreader"
-            build_and_deploy "assist-stats"
             ;;
           none)
             echo "Nothing to build"
