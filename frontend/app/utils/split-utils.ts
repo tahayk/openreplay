@@ -1,13 +1,13 @@
 /**
  * can be overwritten in saas or ee editions
  * */
-import userStore from 'App/mstore/userStore';
+import { planFeatures } from 'App/utils/planFeatures';
 
 /** feature keys the backend returns in `/account` -> `plan.features` */
 export type PlanFeature = 'agent-issues' | 'agent-tests';
 
 export const hasPlanFeature = (feature: PlanFeature): boolean =>
-  userStore.account?.plan?.features?.includes(feature) ?? false;
+  planFeatures().includes(feature);
 
 /**
  * Smart Issues pages + the agentic parts of segments / saved searches
@@ -24,7 +24,6 @@ export const anyAgentEnabled = (): boolean =>
 
 export const hasAi = false;
 export const hasHealth = true;
-export const hasIssuesSummary = false;
 export const hasSampling = true;
 
 export const menuHidden = {

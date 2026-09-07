@@ -2,6 +2,8 @@ import { IMember } from 'Types/member';
 import { DateTime } from 'luxon';
 import { makeAutoObservable } from 'mobx';
 
+import { setPlanFeatures } from 'App/utils/planFeatures';
+
 import Limit, { ILimits } from './limit';
 
 export interface IAccountAlert {
@@ -80,6 +82,8 @@ export default class Account {
       id: account.id || account.userId,
       expirationDate: DateTime.fromMillis(account.expirationDate ?? 0),
     });
+
+    setPlanFeatures(this.plan?.features);
 
     makeAutoObservable(this);
   }
