@@ -318,3 +318,15 @@ export const getOperatorsByType = (type?: string): Operator[] => {
 
   return operators;
 };
+
+const LIVE_OPERATOR_VALUES = ['is', 'contains'];
+
+// /assist/sessions only matches on equality and substring
+export const getLiveOperatorsByType = (type?: string): Operator[] => {
+  const operators = getOperatorsByType(type).filter((o) =>
+    LIVE_OPERATOR_VALUES.includes(o.value),
+  );
+  return operators.length > 0
+    ? operators
+    : OPERATORS.string.filter((o) => LIVE_OPERATOR_VALUES.includes(o.value));
+};

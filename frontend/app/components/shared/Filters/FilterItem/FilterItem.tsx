@@ -2,6 +2,7 @@ import { useStore } from '@/mstore';
 import {
   Filter,
   OPERATORS,
+  getLiveOperatorsByType,
   getOperatorsByType,
 } from '@/mstore/types/filterConstants';
 import { IFilter } from '@/mstore/types/filterItem';
@@ -105,9 +106,11 @@ function FilterItem(props: Props) {
   }, [isSubItem, parentEventFilterOptions, eventSelections]);
 
   const isDurationFilter = filter.name === 'duration' && filter.autoCaptured;
-  const operatorOptions = isDurationFilter
-    ? OPERATORS.duration
-    : getOperatorsByType(filter.dataType);
+  const operatorOptions = isLive
+    ? getLiveOperatorsByType(filter.dataType)
+    : isDurationFilter
+      ? OPERATORS.duration
+      : getOperatorsByType(filter.dataType);
 
   const canShowValues = useMemo(
     () =>
