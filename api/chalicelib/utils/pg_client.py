@@ -145,6 +145,7 @@ class PostgresClient:
         return self.cursor
 
     def __exit__(self, *args):
+        dead_connection = False
         try:
             self.connection.commit()
             self.cursor.close()
@@ -152,6 +153,8 @@ class PostgresClient:
                 self.connection.close()
         except Exception as error:
             logger.error("Error while committing/closing PG-connection", exc_info=error)
+            dead_connection = isinstance(error, (psycopg2.OperationalError, psycopg2.InterfaceError)) \
+                              or bool(self.connection.closed)
             if str(error) == "connection already closed" \
                     and self.use_pool \
                     and not self.long_query \
@@ -166,7 +169,12 @@ class PostgresClient:
                     and self.use_pool \
                     and not self.long_query \
                     and not self.unlimited_query:
-                postgreSQL_pool.putconn(self.connection)
+                postgreSQL_pool.putconn(self.connection, close=dead_connection)
+            elif dead_connection and not self.connection.closed:
+                try:
+                    self.connection.close()
+                except Exception as error:
+                    logger.error("Error while closing dead PG-connection", exc_info=error)
 
     def __execute(self, query, vars=None):
         try:
