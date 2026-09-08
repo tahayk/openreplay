@@ -1,9 +1,7 @@
 import json
 import logging
-from typing import List
 
 from chalicelib.core.sourcemaps import sourcemaps
-
 from chalicelib.utils import ch_client, pg_client
 from chalicelib.utils import helper
 from chalicelib.utils.TimeUTC import TimeUTC
@@ -11,8 +9,9 @@ from chalicelib.utils.TimeUTC import TimeUTC
 logger = logging.getLogger(__name__)
 
 
-def get(error_id) -> dict | List[dict]:
+def get(error_id, project_id) -> dict | None:
     with ch_client.ClickHouseClient() as cur:
+        # @formatter:off
         query = """SELECT error_id,
                           project_id,
                           `$properties`.source  AS source,
@@ -22,10 +21,19 @@ def get(error_id) -> dict | List[dict]:
                           stacktrace,
                           stacktrace_parsed_at
                    FROM product_analytics.events
-                            LEFT JOIN experimental.parsed_errors USING (error_id)
+                            LEFT JOIN (SELECT error_id, stacktrace, stacktrace_parsed_at
+                                       FROM experimental.parsed_errors
+                                       WHERE project_id = toUInt16(%(project_id)s)
+                                        AND error_id = %(error_id)s
+                                        AND NOT is_deleted
+                                       ORDER BY stacktrace_parsed_at DESC
+                                       LIMIT 1) AS parsed USING (error_id)
                    WHERE "$event_name" = 'ERROR'
-                     AND error_id = %(error_id)s LIMIT 1;"""
-        rows = cur.execute(query, {"error_id": error_id})
+                     AND error_id = %(error_id)s
+                     AND events.project_id = toUInt16(%(project_id)s) 
+                   LIMIT 1;"""
+        # @formatter:on
+        rows = cur.execute(query, {"error_id": error_id, "project_id": project_id})
         if len(rows) == 0:
             return None
     return helper.dict_to_camel_case(rows[0])
@@ -40,7 +48,7 @@ def __save_stacktrace(project_id, error_id, data):
 
 
 def get_trace(project_id, error_id):
-    error = get(error_id=error_id)
+    error = get(error_id=error_id, project_id=project_id)
     if error is None:
         return {"errors": ["error not found"]}
     if error.get("source", "") != "js_exception":
