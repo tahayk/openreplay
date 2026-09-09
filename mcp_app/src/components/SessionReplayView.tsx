@@ -9,6 +9,8 @@ interface SessionReplayViewProps {
   duration: number;
   sessionId: string;
   siteId: string;
+  /** Present when the instance encrypts recording files. */
+  fileKey?: string;
   callServerTool: (req: { name: string; arguments: Record<string, unknown> }) => Promise<any>;
   app?: any;
   onBack?: () => void;
@@ -31,7 +33,7 @@ const OR_ICON_SVG = `<svg viewBox="0 0 52 59" xmlns="http://www.w3.org/2000/svg"
   </g>
 </svg>`;
 
-export default function SessionReplayView({ fileUrls, startTs, duration, sessionId, siteId, callServerTool, app, onBack }: SessionReplayViewProps) {
+export default function SessionReplayView({ fileUrls, startTs, duration, sessionId, siteId, fileKey, callServerTool, app, onBack }: SessionReplayViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<ReplayEngine | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,6 +43,8 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
   const [urls, setUrls] = useState(fileUrls);
   const [currentStartTs, setCurrentStartTs] = useState(startTs);
   const [currentDuration, setCurrentDuration] = useState(duration);
+  const [currentFileKey, setCurrentFileKey] = useState(fileKey);
+  const [expired, setExpired] = useState(false);
   const [playback, setPlayback] = useState<PlaybackState>({
     time: 0,
     playing: false,
@@ -50,6 +54,7 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
     speed: 1,
     skipInactivity: false,
     skipIntervals: [],
+    stalled: false,
   });
   const [speedOpen, setSpeedOpen] = useState(false);
   const [intervalOpen, setIntervalOpen] = useState(false);
@@ -60,7 +65,6 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
     setPlayback(state);
   }, []);
 
-  const isExpiredError = error?.includes('403');
 
   // Re-request fresh signed URLs from the server and reload
   const handleRetry = useCallback(async () => {
@@ -81,15 +85,17 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
       // Reset state and trigger reload with fresh URLs
       setStarted(false);
       setError(null);
+      setExpired(false);
       setCurrentStartTs(data.startTs);
       setCurrentDuration(data.duration);
+      setCurrentFileKey(data.fileKey);
       setUrls(data.fileUrls);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to refresh replay URLs');
     } finally {
       setRetrying(false);
     }
-  }, [callServerTool, sessionId]);
+  }, [callServerTool, sessionId, siteId]);
 
   // Fetch mob files and initialize engine
   useEffect(() => {
@@ -103,7 +109,7 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
     engine.setCssProxy(async (url: string) => {
       try {
         const result = await callServerTool({
-          name: '_fetch_mob_file',
+          name: '_fetch_css',
           arguments: { url },
         });
         const base64 = result?.content?.[0]?.text;
@@ -126,11 +132,17 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
         setLoading(true);
         setError(null);
 
-        const { messages, error: parseError } = await fetchAndParseMobFiles(urls, currentStartTs, callServerTool);
+        const { messages, error: parseError, expired: urlsExpired } = await fetchAndParseMobFiles(
+          urls,
+          currentStartTs,
+          callServerTool,
+          currentFileKey,
+        );
 
         if (cancelled) return;
 
         if (parseError || messages.length === 0) {
+          setExpired(!!urlsExpired);
           setError(parseError || 'No messages parsed from recording');
           setLoading(false);
           return;
@@ -153,13 +165,16 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
       engine.clean();
       engineRef.current = null;
     };
-  }, [urls, currentStartTs, currentDuration, handleStateChange, callServerTool]);
+  }, [urls, currentStartTs, currentDuration, currentFileKey, handleStateChange, callServerTool]);
 
-  // Track playing state in a ref so the IntersectionObserver callback reads fresh values
+  // Track playing state in a ref so the IntersectionObserver callback reads
+  // fresh values without re-registering the observer on every frame.
   const playingRef = useRef(false);
   useEffect(() => { playingRef.current = playback.playing; }, [playback.playing]);
 
-  // Pause playback when the view scrolls offscreen, resume when visible again
+  // Pause playback when the view scrolls offscreen, resume when visible again.
+  // `pausedByScroll` keeps a deliberate user pause from being auto-resumed.
+  const pausedByScrollRef = useRef(false);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -169,9 +184,13 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
         const engine = engineRef.current;
         if (!engine) return;
         if (!entry.isIntersecting) {
-          engine.pause();
-        } else {
-          // we can continue playing here;
+          if (playingRef.current) {
+            pausedByScrollRef.current = true;
+            engine.pause();
+          }
+        } else if (pausedByScrollRef.current) {
+          pausedByScrollRef.current = false;
+          engine.play();
         }
       });
     });
@@ -188,6 +207,7 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
   };
 
   const handleTogglePlay = () => {
+    pausedByScrollRef.current = false;
     engineRef.current?.togglePlay();
   };
 
@@ -261,7 +281,7 @@ export default function SessionReplayView({ fileUrls, startTs, duration, session
         )}
         {error && (
           <div className="replay-error">
-            {isExpiredError ? (
+            {expired ? (
               <>
                 <p>Session recording URLs have expired</p>
                 <button

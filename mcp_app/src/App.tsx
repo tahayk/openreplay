@@ -21,7 +21,7 @@ function App() {
   const { app, isConnected, error: appError } = useApp({
     appInfo: {
       name: 'OpenReplay Viewer',
-      version: '1.0.0',
+      version: __APP_VERSION__,
     },
     capabilities: {},
     onAppCreated: async (createdApp) => {
@@ -79,7 +79,12 @@ function App() {
     async (req: { name: string; arguments: Record<string, unknown> }) => {
       if (!app) throw new Error('App not initialized');
       const result = await app.callServerTool(req);
-      await handleToolResult(result, app);
+      // Hand the call back as a retry thunk so an auth failure can be replayed
+      // once the user logs in.
+      await handleToolResult(result, app, async () => {
+        const retried = await app.callServerTool(req);
+        await handleToolResult(retried, app);
+      });
       return result;
     },
     [app, handleToolResult],
@@ -258,6 +263,7 @@ function App() {
             duration={state.replayData.duration}
             sessionId={state.replayData.sessionId}
             siteId={state.replayData.siteId}
+            fileKey={state.replayData.fileKey}
             callServerTool={callServerTool}
             app={app}
             onBack={

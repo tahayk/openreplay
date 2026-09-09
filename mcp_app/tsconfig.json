@@ -25,6 +25,9 @@
       "@openreplay/player/*": ["../player/src/*"]
     }
   },
-  "include": ["src", "server.ts", "../player/src"],
+  // `../player/src` is deliberately NOT included: `paths` already resolves the
+  // imports, and pulling the whole player library in floods this project's
+  // typecheck with pre-existing errors from code it doesn't own.
+  "include": ["src", "lib", "server.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

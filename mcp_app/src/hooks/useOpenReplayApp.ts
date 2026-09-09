@@ -18,6 +18,7 @@ interface AppState {
     duration: number;
     sessionId: string;
     siteId: string;
+    fileKey?: string;
   } | null;
   showAuthOverlay: boolean;
   authError: string | null;
@@ -39,7 +40,14 @@ export function useOpenReplayApp() {
     lastFailedRequest: null,
   });
 
-  const handleToolResult = async (result: any, app: App) => {
+  // `retry` re-issues the call that produced this result. Only app-initiated
+  // calls can supply one — host-driven results (ontoolresult) aren't ours to
+  // replay — so it stays null for those and no stale retry is queued.
+  const handleToolResult = async (
+    result: any,
+    app: App,
+    retry?: () => Promise<void>,
+  ) => {
     try {
       if (result.content?.[0]?.type === 'text') {
         const data = JSON.parse(result.content[0].text);
@@ -50,6 +58,7 @@ export function useOpenReplayApp() {
             ...prev,
             showAuthOverlay: true,
             authError: data.error,
+            lastFailedRequest: retry ?? null,
           }));
           return;
         }
@@ -148,6 +157,7 @@ export function useOpenReplayApp() {
               duration: data.duration,
               sessionId: data.sessionId,
               siteId: data.siteId,
+              fileKey: data.fileKey,
             },
             showAuthOverlay: false,
             authError: null,

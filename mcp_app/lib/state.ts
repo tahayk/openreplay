@@ -12,9 +12,27 @@ export interface Project {
   name: string;
 }
 
-// In-memory store for replay messages (keyed by sessionId)
-// Messages are stored here after parsing and fetched by the UI via _get_replay_data
-export const replayStore = new Map<string, any[]>();
+// Mob-file URLs this server itself minted (from the /replay endpoint).
+// `_fetch_mob_file` will only fetch URLs present here, so the UI can never
+// steer the server at an arbitrary host. Bounded so a long session doesn't
+// grow it without limit; signed URLs expire anyway.
+const MOB_URL_ALLOWLIST_MAX = 256;
+const mobUrlAllowlist = new Set<string>();
+
+export function allowMobUrls(urls: string[]) {
+  for (const url of urls) {
+    if (mobUrlAllowlist.size >= MOB_URL_ALLOWLIST_MAX) {
+      // Drop the oldest entry (insertion-ordered Set)
+      const oldest = mobUrlAllowlist.values().next().value;
+      if (oldest !== undefined) mobUrlAllowlist.delete(oldest);
+    }
+    mobUrlAllowlist.add(url);
+  }
+}
+
+export function isMobUrlAllowed(url: string): boolean {
+  return mobUrlAllowlist.has(url);
+}
 
 // Abort controller for cancelling in-flight polls on shutdown
 export let pollAbortController: AbortController | null = null;

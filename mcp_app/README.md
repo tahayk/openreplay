@@ -1,23 +1,24 @@
 # OpenReplay MCP App
 
-An interactive MCP (Model Context Protocol) app for viewing OpenReplay charts and session replays. This app allows you to connect to your OpenReplay instance (hosted or self-hosted), authenticate, fetch chart data, and view session replays - all from within Claude Desktop or any MCP-enabled host.
+An interactive MCP (Model Context Protocol) app for exploring OpenReplay analytics and watching session replays. Connect it to your OpenReplay instance — SaaS or self-hosted — and query sessions, build charts, map user journeys, and replay recordings without leaving Claude Desktop or any MCP-enabled host.
 
 ## Features
 
-- 🔐 **Authentication**: Browser-based login (recommended) or a raw JWT token
-- ⚙️ **Configurable**: Support for both hosted and self-hosted OpenReplay instances
-- 📊 **Charts**: View analytics charts using Apache ECharts (matching OpenReplay's UI)
-- 🎬 **Session Replay**: Watch session recordings in an embedded iframe
-- 🎨 **Theme Integration**: Automatically adapts to Claude Desktop's theme
-- 🚀 **MCP Tools**: Exposes server tools for data fetching and configuration
+- 🔐 **Authentication**: browser-based login (recommended) or a raw JWT token
+- ⚙️ **Configurable**: works against OpenReplay Cloud and self-hosted instances
+- 📊 **Analytics**: timeseries charts, Sankey user journeys, funnels, Web Vitals, and ranked tables
+- 🎬 **Session replay**: full DOM reconstruction in-app, using the same player engine as the OpenReplay UI
+- 🔎 **Session search**: filter by user, country, browser, device, events, metadata, and issues
+- 🎨 **Theme integration**: adapts to the host's light/dark theme
+- 📚 **Docs search**: answers questions from the OpenReplay documentation index
 
 ## Installation
 
 ### Prerequisites
 
-- Node.js 18+ and npm
+- Node.js 20.19+ (or 22.12+) and npm — required by Vite 7
 - Claude Desktop or another MCP-enabled host
-- OpenReplay account (hosted or self-hosted instance)
+- An OpenReplay account (Cloud or self-hosted)
 
 ### Setup
 
@@ -26,14 +27,20 @@ An interactive MCP (Model Context Protocol) app for viewing OpenReplay charts an
    npm install
    ```
 
-2. **Build the UI:**
+   `@openreplay/player` is a `link:` dependency on `../player` in this monorepo, so the
+   replay engine always builds against live player source.
+
+2. **Build the UI and the server bundle:**
    ```bash
    npm run build
    ```
 
+   This typechecks, bundles the React app into a single `dist/index.html` (served as a
+   `ui://` resource), and bundles the server to `dist-server/server.mjs`.
+
 3. **Configure Claude Desktop:**
 
-   Add this to your `~/Library/Application Support/Claude/claude_desktop_config.json`:
+   Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
    ```json
    {
@@ -41,241 +48,212 @@ An interactive MCP (Model Context Protocol) app for viewing OpenReplay charts an
        "openreplay": {
          "command": "node",
          "args": [
-           "/path/to/openreplay-mcp-app/node_modules/.bin/tsx",
-           "/path/to/openreplay-mcp-app/server.ts"
-         ]
+           "/path/to/openreplay-mcp-app/dist-server/server.mjs"
+         ],
+         "env": {
+           "OPENREPLAY_URL": "https://app.openreplay.com"
+         }
        }
      }
    }
    ```
 
-   Replace `/path/to/openreplay-mcp-app` with the actual path to this directory.
+   Replace `/path/to/openreplay-mcp-app` with the actual path, and `OPENREPLAY_URL` with
+   your instance URL if you self-host. See `claude_desktop_config.example.json`.
 
 4. **Restart Claude Desktop**
 
+Alternatively, `./pack.sh` produces `openreplay-mcp-desktop.mcpb`, a bundle Claude Desktop
+can install directly. It prompts for the instance URL via `user_config` in `manifest.json`.
+
 ## Usage
 
-### 1. Configure Backend (for self-hosted)
-
-If you're using a self-hosted OpenReplay instance:
+### 1. Point it at your instance (self-hosted only)
 
 ```
-Configure the OpenReplay backend to use https://api.your-domain.com
+Configure OpenReplay to use https://openreplay.my-company.com
 ```
 
-### 2. Login
+Give it the URL you type into your browser — **not** the API host. The API base is derived
+automatically (`api.openreplay.com` for Cloud, `<host>/api` otherwise). This is only needed
+if you didn't set `OPENREPLAY_URL` in the host config.
+
+### 2. Log in
 
 ```
 Log in to OpenReplay
 ```
 
-This opens your OpenReplay instance in the browser. Approve access there and return
-to the app. Advanced users can instead authenticate with a raw JWT token.
+You get an authorize URL to open yourself. Approve access in the OpenReplay tab and return
+to the app. Advanced users can authenticate with a raw JWT instead.
 
-### 3. View Charts
-
-```
-Show me the OpenReplay dashboard chart for site ID 123
-```
-
-The app will:
-1. Fetch chart data from your OpenReplay API
-2. Render interactive charts using ECharts
-3. Display the data in the UI with the same styling as OpenReplay
-
-### 4. View Session Replays
+### 3. Explore analytics
 
 ```
-Show me the session replay for session ID abc-123-def
+Show me sessions over the last 7 days for project MyApp
+Show me the top browsers this week
+What's the drop-off in the signup funnel?
+How are Web Vitals trending on the checkout page?
+Map the user journey from the landing page
 ```
 
-The app will:
-1. Generate the replay URL
-2. Display the session in an iframe
-3. Provide a link to open in a new tab
+### 4. Watch a replay
+
+```
+Show me recent sessions with JS errors, then replay the second one
+```
+
+The replay runs in-app: mob files are fetched through the server, parsed, and reconstructed
+into a sandboxed iframe with a timeline, speed control, skip-inactivity, and fullscreen.
 
 ## Available MCP Tools
 
-### Server Tools
+### UI tools
 
-These tools can be called by Claude or your application:
+These render a view alongside the result.
 
-#### `configure_backend`
-Configure the OpenReplay backend URL.
+| Tool | Purpose |
+|------|---------|
+| `view_recent_sessions` | Session list with user info, timing, device, play buttons |
+| `view_chart` | Timeseries chart (sessions over time) |
+| `view_user_journey` | Sankey diagram of navigation paths |
+| `view_web_vitals` | Core Web Vitals cards + percentile table |
+| `view_table_chart` | Ranked bars (top pages, browsers, countries…) |
+| `view_funnel` | Step-by-step conversion funnel |
+| `view_session_replay` | Interactive replay with DOM reconstruction |
 
-```typescript
-{
-  backendUrl: "https://api.your-domain.com"
-}
-```
+### Server tools
 
-#### `login_browser`
-Start browser-based login (recommended). Opens the OpenReplay authorize page and
-returns immediately; call `complete_login` after the user approves access.
+| Tool | Purpose |
+|------|---------|
+| `configure_backend` | Set the OpenReplay instance URL (`appUrl`) |
+| `login_browser` | Start browser login; returns an authorize URL |
+| `complete_login` | Finish browser login by polling for approval |
+| `login_jwt` | Authenticate with a raw JWT (advanced / service account) |
+| `logout` | Clear auth and delete the persisted token |
+| `get_auth_status` | Check authentication state |
+| `list_projects` / `get_project_id` | List projects; resolve a name to an ID |
+| `get_available_filters` | Filter catalog for a project |
+| `fetch_sessions` | Raw session JSON, no UI |
+| `get_session_details` | Replay metadata + session events |
+| `get_session_replay` | Replay URL for a session |
+| `fetch_events` / `fetch_event_definitions` / `fetch_users` | Data-management queries |
+| `fetch_chart_data` | Generic `/cards/try` proxy |
+| `search_docs` | Search the OpenReplay documentation index |
 
-```typescript
-{
-  appUrl: "https://app.openreplay.com" // optional, uses the configured instance if omitted
-}
-```
-
-#### `login_jwt`
-Authenticate with a raw JWT token (advanced / service-account flow).
-
-```typescript
-{
-  jwt: "your-jwt-token"
-}
-```
-
-#### `fetch_chart_data`
-Fetch chart data from the OpenReplay API.
-
-```typescript
-{
-  endpoint: "/api/v1/dashboard/chart",
-  params: { siteId: "123" },
-  siteId: "123"
-}
-```
-
-#### `get_session_replay`
-Get the session replay URL.
-
-```typescript
-{
-  sessionId: "abc-123-def",
-  siteId: "123"
-}
-```
-
-#### `get_auth_status`
-Check authentication status.
-
-```typescript
-{}
-```
-
-#### `view_openreplay`
-Open the interactive UI viewer (this is the main UI tool).
-
-```typescript
-{
-  chartData: { ... },
-  sessionId: "abc-123-def"
-}
-```
+Tools prefixed with `_` (`_refresh_replay_urls`, `_fetch_mob_file`, `_fetch_css`) are called
+by the app's own UI, not by the model.
 
 ## Architecture
 
-### Server (`server.ts`)
+### Server (`server.ts`, `lib/`)
 
-- MCP server implementation using `@modelcontextprotocol/sdk`
-- Exposes tools for authentication, configuration, and data fetching
-- Handles API requests to OpenReplay backend
-- Serves the bundled React UI as an MCP resource
+- MCP server over stdio, built on `@modelcontextprotocol/sdk` and `@modelcontextprotocol/ext-apps`
+- Registers all tools (`lib/tools.ts`), talks to the OpenReplay REST API (`lib/api.ts`)
+- Holds auth and caches in memory (`lib/state.ts`), persisting the JWT to disk
+- Serves the bundled React UI as a single `ui://` resource
 
 ### Client (`src/`)
 
-- React 19 + TypeScript
-- ECharts for data visualization
-- MCP App integration using `@modelcontextprotocol/ext-apps/react`
-- Theme-aware styling that adapts to host environment
+- React 19 + TypeScript, bundled to one HTML file by Vite + `vite-plugin-singlefile`
+- ECharts (tree-shaken, SVG renderer) for charts; plain CSS for the rest
+- Replay engine (`src/player/`) driving the managers from `@openreplay/player`
+- Theme-aware styling via the host's CSS variables
 
-### Data Flow
+### Data flow
 
 ```
-Claude/User → MCP Tool Call → Server → OpenReplay API
-                                      ↓
-                                   Process Response
-                                      ↓
-                                   Return to UI
-                                      ↓
-                                   Render Charts/Replay
+Model → MCP tool call → server → OpenReplay API
+                                    ↓
+                          JSON with a `type` field
+                                    ↓
+                    useOpenReplayApp.handleToolResult
+                                    ↓
+                       the matching React view
 ```
 
 ## Development
 
 ### Scripts
 
-- `npm run build` - Build the React UI
-- `npm run serve` - Start the MCP server
-- `npm run dev` - Build and serve
+- `npm run typecheck` — typecheck this app (ignores `../player`'s pre-existing errors)
+- `npm run build` — typecheck + build UI + build server bundle
+- `npm run serve` — run the server from source with `tsx`
+- `npm run dev` — build, then serve
+- `./pack.sh` — build and produce the `.mcpb` desktop bundle
 
-### Project Structure
+### Project structure
 
 ```
 openreplay-mcp-app/
-├── server.ts              # MCP server implementation
+├── server.ts               # MCP server entry point
+├── manifest.json           # Desktop bundle manifest (.mcpb)
+├── lib/                    # Tools, API client, state, schemas
+├── scripts/typecheck.mjs   # tsc wrapper scoped to this app
 ├── src/
-│   ├── main.tsx          # React entry point
-│   ├── App.tsx           # Main app component with MCP integration
-│   ├── styles.css        # Global styles
-│   └── components/
-│       ├── ConfigPanel.tsx    # Configuration UI
-│       ├── ChartView.tsx      # Chart rendering
-│       └── SessionReplay.tsx  # Session replay viewer
-├── dist/                 # Built UI (generated)
-├── vite.config.ts       # Vite bundler config
-├── tsconfig.json        # TypeScript config
-└── package.json         # Dependencies and scripts
+│   ├── main.tsx            # React entry point
+│   ├── App.tsx             # View router + host integration
+│   ├── hooks/              # useOpenReplayApp (state + result dispatch)
+│   ├── components/         # One component per view
+│   ├── player/             # ReplayEngine + mob file pipeline
+│   ├── styles/             # Theme and per-view CSS
+│   └── utils/              # Host logging, formatting
+├── dist/                   # Built single-file UI (generated)
+├── dist-server/            # Built server bundle (generated)
+└── vite.config.ts
 ```
 
-## Chart Data Format
+`AGENTS.md` has the detailed guide: API shapes, the filter system, replay internals, and
+the quirks worth knowing before changing anything.
 
-The app expects chart data in OpenReplay's format:
+## Security notes
 
-```json
-{
-  "chart": [
-    {
-      "time": "Mon",
-      "timestamp": 1234567890,
-      "Series 1": 100,
-      "Series 2": 200
-    },
-    ...
-  ],
-  "namesMap": ["Series 1", "Series 2"]
-}
-```
+- The JWT is persisted to `~/.openreplay-mcp/config.json` so the session survives restarts.
+  The directory is created `0700` and the file written `0600` (owner read/write only). Run
+  `logout` to delete it.
+- JWTs are sent only via the `Authorization: Bearer` header — never embedded in replay or
+  session URLs.
+- Browser login returns an authorize URL for you to open; the server never launches a
+  browser process.
+- The configured instance URL must be `https`.
+- The replay iframe is sandboxed with `allow-same-origin` only — no `allow-scripts` — so a
+  crafted recording cannot execute JavaScript.
+- Server-side fetch proxies are scoped: `_fetch_mob_file` will only fetch URLs the server
+  itself issued from the authenticated replay endpoint, and `_fetch_css` (used for
+  stylesheet hrefs found inside a *recorded page*) rejects non-https URLs, IP literals, and
+  hostnames resolving into private, loopback, or link-local space. Both cap response size.
+- Recordings from instances with file encryption enabled are decrypted in the browser; the
+  key travels with the replay metadata and is never written to disk.
 
-## Customization
+## Limitations
 
-### Adding New Chart Types
-
-Edit `src/components/ChartView.tsx` to add support for bar charts, pie charts, etc. The component uses ECharts, so you can add any chart type from the [ECharts examples](https://echarts.apache.org/examples/).
-
-### Styling
-
-The app uses CSS variables for theming. All colors, fonts, and spacing automatically adapt to the host's theme through MCP's `onhostcontextchanged` handler.
-
-## Security Notes
-
-- The JWT is persisted to `~/.openreplay-mcp/config.json` so the session survives
-  restarts. The directory is created `0700` and the file is written `0600`
-  (owner read/write only). Run `logout` to delete it.
-- JWT tokens are sent only via the `Authorization: Bearer` header — never embedded
-  in replay/session URLs.
-- The browser login flow returns an authorize URL for you to open yourself; the
-  server does not launch a browser process.
-- Session replay iframe uses the `sandbox` attribute for security
-- All API requests go through the MCP server (not directly from the UI), and the
-  configured instance URL must be `https`
+- **Mobile sessions** (iOS/Android) aren't replayable in-app — the engine handles web DOM
+  recordings only. `view_session_replay` returns a link to the OpenReplay UI instead.
+- **Canvas elements** render blank; canvas replay needs the separate canvas tarballs.
+- **Signed mob URLs expire** after ~15 minutes. The replay view offers a "Reload replay"
+  button that re-signs them.
+- **Long sessions** load slowly — whole mob files are transferred in one response, with no
+  streaming yet.
+- **Nested event filters** (e.g. sessions with 4xx requests to a specific path) are only
+  partially supported by the filter resolver.
 
 ## Troubleshooting
 
-### "Not authenticated" error
-Make sure you've logged in (`login_browser` or `login_jwt`) before fetching data.
+### "Not authenticated"
+Log in first (`login_browser`, or `login_jwt` for a raw token). Persisted JWTs expire — the
+auth overlay handles re-auth.
 
-### Charts not displaying
-Check the raw data format in the debug section. The app expects OpenReplay's chart data structure.
+### Replay won't load
+Check that the session is a web recording (mobile isn't supported), and that the mob URLs
+haven't expired — use "Reload replay". If the instance encrypts recording files, make sure
+the replay metadata includes `fileKey`.
 
-### Session replay not loading
-Verify the session ID is correct and you have access to view it in your OpenReplay instance.
+### Charts empty
+Verify the project has data in the requested range, and that filters resolved — run
+`get_available_filters` to see valid filter names for the project.
 
 ### MCP server not connecting
-1. Check the path in `claude_desktop_config.json`
+1. Check the path in `claude_desktop_config.json` points at `dist-server/server.mjs`
 2. Make sure you ran `npm run build`
 3. Restart Claude Desktop
-4. Check Claude Desktop logs: `~/Library/Logs/Claude/`
+4. Check the logs: `~/Library/Logs/Claude/`

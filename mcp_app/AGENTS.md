@@ -11,45 +11,31 @@ server.ts                    MCP server entry point (stdio transport)
 lib/
   tools.ts                   All tool registrations (UI + internal)
   api.ts                     OpenReplay REST API client functions
-  state.ts                   In-memory state (auth, projects, filter cache)
+  state.ts                   In-memory state (auth, projects, filter cache, mob-URL allowlist)
   schemas.ts                 Zod validation schemas for tool inputs
+  version.ts                 APP_VERSION, read from package.json at runtime
   countries.ts               Country name <-> ISO code resolver
   countriesList.ts           Raw country code -> name map (data only)
+scripts/
+  typecheck.mjs              tsc wrapper that ignores ../player's pre-existing errors
 src/
   App.tsx                    Main React component (view router)
+  vite-env.d.ts              Declares __APP_VERSION__ (injected by vite define)
   hooks/useOpenReplayApp.ts  State management + tool result dispatcher
   components/
     ChartView.tsx            ECharts timeseries line chart
     SankeyView.tsx           ECharts Sankey / user journey diagram
-    TableChartView.tsx       ECharts horizontal bar chart (top X)
+    TableChartView.tsx       Pure CSS ranked bar list (top X)
     WebVitalsView.tsx        Pure CSS vitals cards + percentile table
     FunnelView.tsx           Pure CSS step-by-step conversion bars
     SessionList.tsx          Session list with play buttons
     SessionReplayView.tsx    Interactive session replay player
     AuthOverlay.tsx          Browser-login overlay (URL only)
-    ConfigPanel.tsx          Backend/auth/chart config forms (dev)
     IdleView.tsx             Empty state placeholder
     chart.schema             API reference for /cards/try endpoint
   player/
-    ReplayEngine.ts          Core replay engine (play, pause, jump, timeline)
-    DOMManager.ts            DOM construction from recorded messages
-    VirtualDOM.ts            Virtual DOM representation and diffing
-    Screen.ts                Viewport/iframe management for replay
-    StylesManager.ts         CSS rules injection and management
-    Cursor.ts                Mouse cursor position tracking
-    SelectionManager.ts      Text selection tracking
-    FocusManager.ts          Input focus tracking
-    PagesManager.ts          Page/navigation tracking during replay
-    ListWalker.ts            Message list traversal utilities
-    MFileReader.ts           .mob file format reader
-    PrimitiveReader.ts       Binary primitive data reader
-    RawMessageReader.gen.ts  Generated message parser
-    raw.gen.ts               Generated raw message types
-    rewriteMessage.ts        Message transformation/normalization
-    safeCSSRules.ts          CSS security sanitization
-    fetchAndParseMobFiles.ts Fetch + decompress + parse mob files
-    unpack.ts                Zstd/fflate decompression
-    types.ts                 PlaybackState and shared types
+    ReplayEngine.ts          Playback loop, per-tab DOM routing, CSS proxy
+    fetchAndParseMobFiles.ts Fetch (via server proxy) + decrypt + parse mob files
   styles/
     index.css                Stylesheet imports
     base.css                 Base HTML element and layout styles
@@ -61,14 +47,29 @@ src/
     utilities.css            Utility classes
   utils/
     debugger.ts              Host logging helper via app.sendLog
+    formatDate.ts            Date-range label formatting
+    countries.ts             Country code -> display name (UI side)
 ```
+
+Everything else the replay needs — `Screen`, `PagesManager`, `DOMManager`, `VirtualDOM`,
+`MobFileParser`, `MFileReader`, `rewriteMessage`, `messageOrder`, `unpack`, `crypto` —
+comes from the **`@openreplay/player` package** (`../player`, a `link:` dependency, so
+`node_modules/@openreplay/player` is a symlink to live source, never a stale copy).
+Vite resolves it through the `resolve.alias` in `vite.config.ts`; `tsc` through `paths`
+in `tsconfig.json`. Do not vendor copies of those files into this app — a fork silently
+drifts from the player (new message types, ordering fixes) and breaks replay.
 
 ### Build
 
 Vite builds the React app into a **single HTML file** (`dist/index.html`) via `vite-plugin-singlefile`. The server reads this file and serves it as a `ui://` resource. No separate asset hosting needed.
 
-Run: `npm run build` (includes `tsc` + Vite)
-Type check only: `npx tsc --noEmit`
+Run: `npm run build` — typecheck, then Vite (UI), then esbuild (server bundle).
+Type check only: `npm run typecheck`.
+
+`npm run typecheck` wraps `tsc --noEmit` via `scripts/typecheck.mjs`. `tsc` follows
+imports into `../player/src` and reports that package's ~35 pre-existing type errors;
+the wrapper drops diagnostics anchored outside this directory and fails on anything in
+mcp_app's own files. Run bare `npx tsc --noEmit` if you want to see the player's too.
 
 ---
 
@@ -124,8 +125,9 @@ No UI — return plain text/JSON to the model.
 | `get_session_replay` | Get session replay URL |
 | `get_session_details` | Session replay metadata + events |
 | `get_available_filters` | Filter catalog for a project |
-| `_refresh_replay_urls` | Re-fetch signed mob file URLs (internal, called by UI when URLs expire) |
-| `_fetch_mob_file` | Fetch mob/CSS file by URL, return base64 (internal, bypasses sandbox CSP) |
+| `_refresh_replay_urls` | Re-fetch signed mob file URLs + fileKey (internal, called by UI when URLs expire) |
+| `_fetch_mob_file` | Fetch a mob file by URL, return base64. Only fetches URLs this server minted (see `allowMobUrls`), capped at 128 MB |
+| `_fetch_css` | Fetch an external stylesheet for the replay iframe, return base64. Stricter guard — these URLs come from the recorded page (see `assertProxyableCssUrl`), capped at 5 MB |
 
 ### Tool Visibility (MCP Apps extension)
 
@@ -137,7 +139,7 @@ Only applies to `registerAppTool`. Set in `_meta.ui.visibility`:
 | `["app"]` | React app can call via `callServerTool()`, hidden from model |
 | `["model", "app"]` | Both (default if omitted) |
 
-All 7 UI tools use `["model"]`. The React app only calls tools for auth (`configure_backend`, `login_browser`, `complete_login`) and replay internals (`_refresh_replay_urls`, `_fetch_mob_file`) — those are internal tools and don't use visibility.
+All 7 UI tools use `["model"]`. The React app only calls tools for auth (`configure_backend`, `login_browser`, `complete_login`) and replay internals (`_refresh_replay_urls`, `_fetch_mob_file`, `_fetch_css`) — those are internal tools and don't use visibility.
 
 `server.registerTool` does NOT support the visibility feature. It's an MCP Apps extension only for `registerAppTool`.
 
@@ -161,7 +163,14 @@ All UI tools include a TIP in their description guiding the model to use `view_r
 
 ### Base URL
 
-Default: `https://foss.openreplay.com`. Configurable via `configure_backend` tool.
+Default: `https://app.openreplay.com`, overridden by the `OPENREPLAY_URL` env var (set by
+the host from `user_config.app_url` in `manifest.json`) or the `configure_backend` tool.
+Env wins over the persisted value on every launch; if they disagree the stored JWT is
+dropped, since it was minted against a different instance.
+
+One URL only — the address the user types in their browser. `buildApiUrl` derives the API
+host from it: `app.openreplay.com` -> `api.openreplay.com` with the `/api` path segment
+stripped, anything else -> `<host>/api`.
 
 ### Authentication
 
@@ -180,7 +189,13 @@ Error convention: if `state.jwt` is null, throw `"AUTH_ERROR: Not authenticated"
 | `/v2/api/{siteId}/cards/try` | POST | All analytics (charts, journeys, vitals, tables, funnels) |
 | `/api/pa/{siteId}/filters` | GET | Available filter definitions |
 
-The replay endpoint returns signed S3 URLs for mob files (`domURL` for web, `videoURL` for mobile), `startTs`, `duration`, and `platform`.
+The replay endpoint returns signed S3 URLs for mob files (`domURL` for web, `videoURL` for
+the mobile screen video), `startTs`, `duration`, `platform`, and — on instances with file
+encryption enabled — `fileKey`.
+
+`view_session_replay` only uses `domURL`. `videoURL` is **not** a message source: mobile
+recordings need `IOSMessageManager` plus a video track, so mobile platforms are rejected
+with a link to the full OpenReplay UI rather than rendered by the embedded engine.
 
 ### The `/cards/try` mega-endpoint
 
@@ -304,7 +319,7 @@ interface AppState {
   webVitalsData: any | null;
   tableChartData: any | null;
   funnelData: any | null;
-  replayData: { fileUrls: string[]; startTs: number; duration: number; sessionId: string; siteId: string } | null;
+  replayData: { fileUrls: string[]; startTs: number; duration: number; sessionId: string; siteId: string; fileKey?: string } | null;
   showAuthOverlay: boolean;
   authError: string | null;
   lastFailedRequest: (() => Promise<void>) | null;
@@ -338,6 +353,11 @@ The overlay only takes the OpenReplay URL — no token or credential fields. On 
 1. Calls `configure_backend` via `app.callServerTool()`
 2. Calls `login_browser`, then polls `complete_login` until approved
 3. Closes overlay, retries `lastFailedRequest` if set
+
+`lastFailedRequest` is only populated for **app-initiated** calls: `callServerToolAndApply`
+passes a retry thunk into `handleToolResult`, which stores it when the result carries
+`isAuthError`. Host-driven results (`ontoolresult`) supply no thunk — those calls aren't
+ours to replay — so the field stays null and nothing stale is queued.
 
 (The `login_jwt` tool still exists for advanced/service-account use, but the UI does not expose it.)
 
@@ -374,22 +394,24 @@ All view components use these shared classes for consistent layout:
 
 ### Component types
 
-**ECharts components** (ChartView, SankeyView, TableChartView):
+**ECharts components** (ChartView, SankeyView):
 - Use tree-shaken ECharts imports with `SVGRenderer` (not Canvas — better for sandboxed iframes)
 - Use `ResizeObserver` for responsive resize
 - Read CSS variables at render time via `getComputedStyle(document.documentElement)` for label/tooltip colors — ECharts doesn't resolve `var()` natively
 
-**Pure CSS components** (WebVitalsView, FunnelView, SessionList):
+**Pure CSS components** (TableChartView, WebVitalsView, FunnelView, SessionList):
 - Use CSS classes and `var()` directly — no special handling needed
 - Status colors via `.vitals-card--good`, `.vitals-card--warning`, `.vitals-card--bad` or `var(--or-status-*)` inline
 
 **Replay component** (SessionReplayView):
-- Uses the `ReplayEngine` from `src/player/` — a full DOM reconstruction engine
-- Fetches mob files via `_fetch_mob_file` internal tool (bypasses sandbox CSP)
+- Uses `ReplayEngine` from `src/player/`, driving the real player's DOM managers
+- Fetches mob files via the `_fetch_mob_file` internal tool (bypasses sandbox CSP)
 - Click-to-start overlay with OpenReplay icon, then play/pause on click
-- Timeline scrubber with play/pause button and time display
-- Handles expired signed URLs with retry via `_refresh_replay_urls`
-- CSS proxy for external stylesheets (also fetched via `_fetch_mob_file`)
+- Timeline scrubber, speed menu, skip-interval menu, skip-inactivity toggle, fullscreen
+- Reloads on `code: "expired"` via `_refresh_replay_urls`
+- Pauses when scrolled offscreen and resumes on return — but only if *it* paused; a
+  manual pause is remembered via `pausedByScrollRef`
+- CSS proxy for external stylesheets goes through `_fetch_css`, not `_fetch_mob_file`
 
 ### ECharts dark mode pattern
 
@@ -412,68 +434,102 @@ Fixed-width columns prevent layout jumping:
 
 ## Session Replay Engine (`src/player/`)
 
-The replay engine reconstructs recorded DOM snapshots and user interactions inside a sandboxed iframe.
+`ReplayEngine` is a thin orchestrator over the real player's managers. It owns the clock
+and the message routing; everything that touches the DOM comes from `@openreplay/player`.
 
 ### Architecture
 
 ```
 SessionReplayView.tsx
-  └── ReplayEngine.ts          Orchestrator: timeline, playback, state
-        ├── Screen.ts           Creates sandboxed iframe, manages viewport
-        ├── DOMManager.ts       Applies DOM mutations (create/move/remove nodes)
-        │     └── VirtualDOM.ts Virtual node tree mirroring recorded DOM
-        ├── StylesManager.ts    Injects <style> rules into iframe
-        ├── Cursor.ts           Renders mouse cursor position
-        ├── FocusManager.ts     Tracks input focus
-        ├── SelectionManager.ts Tracks text selection
-        ├── PagesManager.ts     Handles page navigations
-        └── ListWalker.ts       Iterates sorted message list by timestamp
+  └── ReplayEngine.ts                  Clock, tab routing, skip intervals, CSS proxy
+        ├── Screen                     (player) sandboxed iframe + cursor + viewport
+        ├── PagesManager               (player) one per recorded tab
+        │     └── DOMManager           (player) mutations, styles, focus, selection
+        └── ListWalker                 (player) mouse / click / scroll / resize / tab-change
 ```
 
 ### Data pipeline
 
-1. `fetchAndParseMobFiles(urls, startTs, callServerTool)`:
+1. `fetchAndParseMobFiles(urls, startTs, callServerTool, fileKey?)`:
    - Fetches each mob file URL via `_fetch_mob_file` (base64 response)
-   - Decompresses with zstd (`fzstd`) or gzip (`fflate`)
-   - Parses binary messages via `MFileReader` + `RawMessageReader.gen`
-   - Runs `rewriteMessage` to normalize timestamps relative to `startTs`
-   - Returns flat sorted `Message[]` array
+   - Decrypts with `decryptSessionBytes(bytes, fileKey)` when the instance encrypts files
+   - Feeds bytes to a single `MobFileParser` shared across all files, so reader state
+     carries across the `dom.mobs` / `dom.mobe` boundary and the format is detected once
+   - Drops `tp === 9999` timestamp placeholders
+   - Re-runs `fixMessageOrder` over the merged array for cross-batch time ordering
+
+   **Do not** apply `.sort(sortIframes)` to the merged array. `MobFileParser` already ran
+   it per batch, and it's a non-transitive comparator — handing it to TimSort over a
+   whole session (100k+ messages) is exactly the hazard `messageOrder`'s bucket sort
+   exists to avoid, and it can scramble create-order and drop subtrees.
 
 2. `ReplayEngine.loadMessages(messages, duration)`:
-   - Stores messages in `ListWalker`
-   - Sets `endTime` from duration
-   - Marks `ready: true` in playback state
+   - `rewriteMessage` normalizes URL-based variants
+   - DOM messages are routed to **their own tab's** `PagesManager`, keyed by `msg.tabId`.
+     Merging tabs into one manager interleaves two documents' node ids.
+   - Mouse / click / scroll / resize / tab-change go to shared `ListWalker`s
+   - `sortDomRemoveMessages` re-sorts same-timestamp `RemoveNode`s for `<head>` children
+     ahead of non-removes (mirrors `TabSessionManager`; works around tracker ordering)
+   - `endTime = max(duration, lastMessageTime)` — the API duration can fall short of the
+     last recorded message, which would truncate the tail
 
 3. Playback:
    - `play()` starts a `requestAnimationFrame` loop advancing time
-   - `ListWalker` yields messages up to current time
-   - Each message type is routed to the appropriate manager (DOM, styles, cursor, etc.)
-   - `jump(time)` seeks to a specific timestamp by replaying from start
+   - The clock is **held** (`diffTime = 0`, loop still alive) while `isStalled()` — any
+     `PagesManager` reporting `cssLoading`, or a proxied stylesheet still in flight. Same
+     gate as the player's `ready` flag in `Animator`; without it DOM mutations land
+     against an unstyled document.
+   - `move(t)` resolves the active tab from the tab-change walker, resets that tab's
+     `PagesManager` on a switch so `CreateDocument` re-applies, then `moveReady(t)` on it
+   - Rewinding past a tab's first message resets that tab's walker too
 
 ### PlaybackState
 
 ```typescript
 interface PlaybackState {
-  time: number;      // Current playback position (ms)
-  playing: boolean;  // Is playing
-  completed: boolean; // Reached end
-  endTime: number;   // Total duration (ms)
-  ready: boolean;    // Messages loaded and engine ready
+  time: number;               // Current playback position (ms)
+  playing: boolean;
+  completed: boolean;         // Reached end
+  endTime: number;            // max(API duration, last message time)
+  ready: boolean;             // Messages loaded and engine ready
+  speed: number;
+  skipInactivity: boolean;
+  skipIntervals: SkipInterval[];
+  stalled: boolean;           // Clock held while stylesheets resolve
 }
 ```
 
 ### CSP workaround
 
-Mob files and external CSS are hosted on signed S3 URLs. The sandboxed iframe's CSP blocks direct `fetch()`. Solution:
-- `SessionReplayView` calls `_fetch_mob_file` server tool which fetches on the Node.js side and returns base64
-- `ReplayEngine.setCssProxy()` uses the same pattern for external stylesheets referenced in DOM snapshots
+Mob files and external CSS live on signed S3 URLs; the sandboxed iframe's CSP blocks
+direct `fetch()`. Both are proxied server-side, but through **separate tools with
+different trust levels**:
+
+- `_fetch_mob_file` — URLs come from this server's own authenticated `/replay` response.
+  It only fetches URLs recorded in the allowlist (`allowMobUrls`), so the UI can't steer
+  it anywhere, whatever it passes.
+- `_fetch_css` — hrefs come out of the *recorded page*, i.e. attacker-influenced by
+  whoever's site was recorded. Requires https, rejects IP literals, and rejects hostnames
+  that resolve into private/loopback/link-local space (cloud metadata included).
+
+Proxied CSS is injected via `adoptedStyleSheets`, never by touching the DOM tree — a
+`<link>` or `<style>` insert would desync `VirtualDOM` reconciliation. `:hover`/`:focus`
+are rewritten to `.-openreplay-hover`/`.-openreplay-focus` to match the player.
 
 ### Known replay limitations
 
-1. **No mobile replay** — mob file parsing only handles web DOM messages. Mobile sessions (`videoURL`) would need a video player.
-2. **Signed URL expiry** — S3 URLs expire after ~15 minutes. The "Reload replay" button calls `_refresh_replay_urls` to get fresh URLs.
-3. **Large sessions** — Sessions with many DOM mutations can be slow to parse. No streaming/chunked playback yet.
-4. **External resources** — Images, fonts, and other assets referenced by the recorded DOM may be broken if their URLs are no longer valid.
+1. **No mobile replay** — the engine only handles web DOM messages. `view_session_replay`
+   rejects `ios`/`android` platforms with a link to the OpenReplay UI.
+2. **No canvas replay** — recorded `<canvas>` needs the `canvasURL` tarballs and
+   `CanvasManager#paintFrame` (the replay iframe has no `allow-scripts`, so a canvas
+   can't paint itself). Canvases render blank here.
+3. **Signed URL expiry** — S3 URLs expire after ~15 minutes. `_fetch_mob_file` returns
+   `{ code: "expired" }` on 401/403 and the UI surfaces a "Reload replay" button wired to
+   `_refresh_replay_urls`. Match on the `code`, never on the message text.
+4. **Large sessions** — whole mob files are base64'd through one JSON-RPC frame. No
+   streaming or chunked playback yet; very long sessions are slow to load.
+5. **External resources** — images and fonts referenced by the recorded DOM break once
+   their URLs go stale.
 
 ---
 
@@ -483,11 +539,16 @@ MCP Apps run in sandboxed iframes with strict CSP. Declare domains in `_meta.ui.
 
 ```typescript
 csp: {
-  connectDomains: ["foss.openreplay.com", "*.openreplay.com"],  // fetch()
-  frameDomains: ["foss.openreplay.com"],    // embedded iframes
-  resourceDomains: ["cdn.example.com"],     // images, fonts, scripts
+  connectDomains: uiConnectDomains(),   // fetch()
+  frameDomains: ["app.openreplay.com"], // embedded iframes
+  resourceDomains: ["cdn.example.com"], // images, fonts, scripts
 }
 ```
+
+`uiConnectDomains()` (in `lib/tools.ts`) derives the list from `state.appUrl` plus a
+wildcard on its registrable domain, so self-hosted instances aren't pinned to the SaaS
+domain. Use it everywhere instead of hardcoding `*.openreplay.com` — `server.ts` and every
+`registerAppTool` call already do.
 
 Without proper CSP, you'll get `ERR_BLOCKED_BY_CSP` errors.
 
@@ -549,8 +610,12 @@ Only works client-side (in the React app, not in server-side tool handlers).
 
 10. **ECharts doesn't resolve CSS `var()` in options.** Always use `getComputedStyle` to read theme variables at render time and pass resolved values. This applies to axis labels, tooltips, and any text styling.
 
-11. **Session replay mob files are fetched server-side** because sandbox CSP blocks direct `fetch()` to S3 URLs. The `_fetch_mob_file` tool proxies these requests and returns base64.
+11. **Session replay mob files are fetched server-side** because sandbox CSP blocks direct `fetch()` to S3 URLs. The `_fetch_mob_file` tool proxies these requests and returns base64. It only fetches URLs this server itself issued.
 
-12. **Replay CSS proxy** works the same way — external stylesheets referenced in recorded DOM snapshots are fetched via `_fetch_mob_file` and injected into the replay iframe.
+12. **Replay CSS uses a separate proxy, `_fetch_css`**, not `_fetch_mob_file`. Stylesheet hrefs come from the recorded page rather than from our API, so they get the stricter SSRF guard. Don't collapse the two tools back together.
 
-13. **`_refresh_replay_urls` and `_fetch_mob_file` are prefixed with `_`** to signal they're internal tools called by the UI only, not by the AI model.
+13. **`_refresh_replay_urls`, `_fetch_mob_file` and `_fetch_css` are prefixed with `_`** to signal they're internal tools called by the UI only, not by the AI model.
+
+14. **Version lives in `package.json` only.** `lib/version.ts` reads it at runtime for the MCP `serverInfo`; `vite.config.ts` injects it as `__APP_VERSION__` for the app's `appInfo`. `manifest.json` carries its own copy — bump both when releasing.
+
+15. **Never vendor player source into this app.** `@openreplay/player` is a `link:` dependency pointing at `../player`. Copied files drift (missing new message types, missing ordering fixes) and replay breaks in ways that only show on newer recordings.

@@ -5,14 +5,20 @@
 ### 1. Install and Build
 
 ```bash
-cd /Users/nikitamelnikov/Documents/work/work/openreplay/openreplay-mcp-app
+cd mcp_app
 npm install
 npm run build
 ```
 
+`npm run build` typechecks, bundles the UI into a single `dist/index.html`, and bundles the
+server into `dist-server/server.mjs`.
+
 ### 2. Configure Your Client
 
-The app reads the `OPENREPLAY_BACKEND_URL` environment variable to set the default backend URL. If not set, it defaults to `https://foss.openreplay.com`.
+The app reads the `OPENREPLAY_URL` environment variable — the URL you type into your
+browser, not the API host. If unset it defaults to `https://app.openreplay.com`. The API
+base is derived automatically: `api.openreplay.com` for Cloud, `<host>/api` for
+self-hosted. (`OPENREPLAY_BACKEND_URL` is still read as a legacy alias.)
 
 #### Claude Desktop
 
@@ -26,11 +32,10 @@ Edit your Claude Desktop config file:
     "openreplay": {
       "command": "node",
       "args": [
-        "/ABSOLUTE/PATH/TO/openreplay-mcp-app/node_modules/.bin/tsx",
-        "/ABSOLUTE/PATH/TO/openreplay-mcp-app/server.ts"
+        "/ABSOLUTE/PATH/TO/openreplay-mcp-app/dist-server/server.mjs"
       ],
       "env": {
-        "OPENREPLAY_BACKEND_URL": "https://your-openreplay-instance.com"
+        "OPENREPLAY_URL": "https://your-openreplay-instance.com"
       }
     }
   }
@@ -39,19 +44,19 @@ Edit your Claude Desktop config file:
 
 #### ChatGPT
 
-Copy `.env.example` to `.env` and set your backend URL:
+Copy `.env.example` to `.env` and set your instance URL:
 
 ```bash
 cp .env.example .env
 ```
 
 ```env
-OPENREPLAY_BACKEND_URL=https://your-openreplay-instance.com
+OPENREPLAY_URL=https://your-openreplay-instance.com
 ```
 
 #### Codex
 
-Copy `config.example.toml` to `config.toml` and set your backend URL:
+Copy `config.example.toml` to `config.toml` and set your instance URL:
 
 ```bash
 cp config.example.toml config.toml
@@ -59,7 +64,7 @@ cp config.example.toml config.toml
 
 ```toml
 [env]
-OPENREPLAY_BACKEND_URL = "https://your-openreplay-instance.com"
+OPENREPLAY_URL = "https://your-openreplay-instance.com"
 ```
 
 ### 3. Restart Your Client
@@ -70,10 +75,11 @@ Completely quit and restart your client for the changes to take effect.
 
 ### Example Conversation Flow
 
-**Step 1: Configure Backend (if self-hosted)**
+**Step 1: Point it at your instance (if self-hosted)**
 ```
-Configure my OpenReplay backend to use https://api.mycompany.com
+Configure OpenReplay to use https://openreplay.mycompany.com
 ```
+Pass the browser-facing URL, not the API host.
 
 **Step 2: Login**
 ```
@@ -211,21 +217,27 @@ Fetch chart data from /api/v1/custom/endpoint with params:
 - Raw data inspector for debugging
 
 ### Session Replay
-- Embedded iframe viewer
-- Session ID display
-- Open in new tab option
-- Secure sandbox attributes
+- In-app DOM reconstruction using the same engine as the OpenReplay UI
+- Timeline scrubber, play/pause, speed (0.5x–16x), configurable skip interval
+- Skip-inactivity toggle with inactive ranges marked on the timeline
+- Fullscreen (when the host supports display modes)
+- Auto-pauses when scrolled offscreen, resumes when it comes back
+- "Reload replay" when the signed recording URLs have expired
+- Renders inside an iframe sandboxed to `allow-same-origin` — no script execution
+
+Web recordings only. Mobile (iOS/Android) sessions return a link to the full OpenReplay UI.
 
 ## Troubleshooting
 
 ### Server Won't Start
 ```bash
 # Test the server manually
-cd /Users/nikitamelnikov/Documents/work/work/openreplay/openreplay-mcp-app
+cd mcp_app
 npm run serve
 ```
 
-If you see "OpenReplay MCP Server running on stdio", the server is working.
+If you see `OpenReplay MCP Server v<version> READY on stdio` followed by the tool list, the
+server is working.
 
 ### Charts Not Rendering
 1. Open the chart view
@@ -239,10 +251,12 @@ If you see "OpenReplay MCP Server running on stdio", the server is working.
 - For self-hosted: ensure the API is accessible
 - Check CORS settings on your OpenReplay instance
 
-### Session Replay Iframe Blocked
-Some browsers may block iframe content. To fix:
-1. Click "Open in New Tab" button
-2. Or adjust your browser's iframe/CORS settings
+### Session Replay Won't Load
+1. Check it's a web recording — mobile sessions aren't replayable in-app
+2. If the error mentions expired URLs, click "Reload replay" to re-sign them
+3. On instances with file encryption enabled, the replay metadata must include `fileKey`
+4. Missing styles usually mean an external stylesheet host is unreachable or resolves into
+   private address space, which the CSS proxy refuses to fetch
 
 ## Performance Tips
 
@@ -264,7 +278,8 @@ Some browsers may block iframe content. To fix:
 ### Tool: `configure_backend`
 ```typescript
 {
-  backendUrl: string // Full URL to OpenReplay API (e.g., "https://api.openreplay.com")
+  appUrl: string // OpenReplay instance URL as typed in a browser
+                 // (e.g. "https://app.openreplay.com"); must be https
 }
 ```
 
@@ -300,10 +315,25 @@ Returns immediately with an authorize URL; call `complete_login` after the user 
 }
 ```
 
-### Tool: `view_openreplay`
+### Tool: `view_session_replay`
 ```typescript
 {
-  chartData?: any,    // Chart data to display
-  sessionId?: string  // Session ID for replay
+  sessionId: string,     // Session to replay
+  siteId?: string,       // Project ID (from an earlier session list)
+  projectName?: string   // Alternative to siteId
 }
 ```
+
+### Tool: `view_recent_sessions`
+```typescript
+{
+  siteId?: string,
+  projectName?: string,
+  limit?: number,        // default 10, capped at 50
+  filters?: Array<{ name: string; value?: (string | number)[]; operator?: string;
+                    properties?: object[] }>
+}
+```
+
+Call `get_available_filters` first to discover valid filter names for a project. The full
+tool list is in `README.md`.

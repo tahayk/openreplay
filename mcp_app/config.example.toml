@@ -1,6 +1,7 @@
 # OpenReplay MCP App Configuration (Codex)
-# Copy this file to config.toml and fill in your values
+# Copy this file to config.toml and fill in your value.
 
 [env]
-# OpenReplay backend URL
-OPENREPLAY_BACKEND_URL = "https://your-openreplay-instance.com"
+# Your OpenReplay instance URL — the address you visit in your browser.
+# The API host is derived from this automatically.
+OPENREPLAY_URL = "https://app.openreplay.com"

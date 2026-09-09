@@ -1,5 +1,6 @@
 import MobFileParser from '@openreplay/player/web/messages/MobFileParser';
-import { fixMessageOrder, sortIframes } from '@openreplay/player/web/messages/messageOrder';
+import { fixMessageOrder } from '@openreplay/player/web/messages/messageOrder';
+import { decryptSessionBytes } from '@openreplay/player/web/network/crypto';
 
 type CallServerTool = (req: { name: string; arguments: Record<string, unknown> }) => Promise<any>;
 
@@ -12,14 +13,26 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
+/** `{ code, error }` payload returned by the server's fetch proxies. */
+function readProxyError(text: string): { code?: string; error?: string } | null {
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAndParseMobFiles(
   fileUrls: string[],
   startTs: number,
   callServerTool: CallServerTool,
-): Promise<{ messages: any[]; error?: string }> {
+  fileKey?: string,
+): Promise<{ messages: any[]; error?: string; expired?: boolean }> {
   const errors: string[] = [];
   const allMessages: any[] = [];
   let successCount = 0;
+  let expired = false;
 
   // Single parser instance across all batches — format detected from the
   // first file, reader state shared across continuation files (dom.mobs +
@@ -37,11 +50,19 @@ export async function fetchAndParseMobFiles(
 
       const text = result?.content?.[0]?.text;
       if (!text || result.isError) {
-        errors.push(`File ${i}: server proxy error - ${text || 'empty response'}`);
+        const proxyError = text ? readProxyError(text) : null;
+        if (proxyError?.code === 'expired') expired = true;
+        errors.push(`File ${i}: server proxy error - ${proxyError?.error || text || 'empty response'}`);
         continue;
       }
 
-      const data = base64ToUint8Array(text);
+      let data = base64ToUint8Array(text);
+      // Instances with file encryption enabled hand back AES-CBC cyphertext;
+      // the key travels with the replay metadata. MessageLoader wraps every
+      // parser in the same decrypt step.
+      if (fileKey) {
+        data = await decryptSessionBytes(data, fileKey);
+      }
       const batch = parser.feed(data);
       for (const msg of batch) {
         if ((msg.tp as number) === 9999) continue;
@@ -59,12 +80,15 @@ export async function fetchAndParseMobFiles(
   if (successCount === 0) {
     return {
       messages: [],
+      expired,
       error: `Failed to fetch mob files (${fileUrls.length} URLs). Errors: ${errors.join('; ') || 'unknown'}`,
     };
   }
 
-  // Cross-batch ordering: re-run the same sort the player uses per file
-  // so message-time invariants hold across the dom.mobs/dom.mobe boundary.
-  const sorted = fixMessageOrder(allMessages).sort(sortIframes);
+  // Cross-batch ordering only. MobFileParser already applied `sortIframes`
+  // per batch; re-running it here would hand TimSort a non-transitive
+  // comparator over the whole session (100k+ messages), which is exactly the
+  // hazard messageOrder's bucket sort exists to avoid.
+  const sorted = fixMessageOrder(allMessages);
   return { messages: sorted };
 }

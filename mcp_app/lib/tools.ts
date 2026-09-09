@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import net from "node:net";
+import dns from "node:dns/promises";
 import { z } from "zod";
-import { state, savePersistedState, clearPersistedState, generateAuthCode, assertHttpsUrl } from "./state.js";
+import { state, savePersistedState, clearPersistedState, generateAuthCode, assertHttpsUrl, allowMobUrls, isMobUrlAllowed } from "./state.js";
 import { makeApiRequest, fetchRecentSessions, fetchProjects, getProjectIdByName, fetchSessionReplay, fetchSessionEvents, fetchSessionsTimeseries, fetchPathAnalysis, fetchWebVitals, fetchTableData, fetchFunnel, resolveFilters, resolveFunnelSteps, getOrFetchFilters, fetchEvents, fetchUsers, fetchEventProperties, pollForAuth } from "./api.js";
 import {
   ConfigureBackendSchema,
@@ -67,11 +68,11 @@ const DOCS_STOP_WORDS = new Set([
 
 // Validate a mob-file URL before fetching it server-side.
 //
-// Mob files (replay recordings) are served from blob storage whose host
-// differs from the configured OpenReplay instance, so we can't pin the host to
-// state.appUrl here. What we can do is require https and reject URLs that point
-// directly at an IP literal — closing the obvious SSRF path to loopback /
-// link-local / private addresses (e.g. 127.0.0.1, 169.254.169.254, 10.x).
+// Mob files (replay recordings) are served from blob storage whose host differs
+// from the configured OpenReplay instance, so the host can't be pinned to
+// state.appUrl. Instead we only fetch URLs this server itself minted from the
+// authenticated /replay endpoint (see allowMobUrls). That makes the UI unable
+// to steer the fetch anywhere, whatever it passes.
 function assertFetchableMobUrl(raw: string): string {
   let u: URL;
   try {
@@ -82,12 +83,114 @@ function assertFetchableMobUrl(raw: string): string {
   if (u.protocol !== "https:") {
     throw new Error("Mob file URL must use https");
   }
+  if (!isMobUrlAllowed(u.toString())) {
+    throw new Error(
+      "Refusing to fetch a URL this server did not issue. Mob file URLs come from view_session_replay."
+    );
+  }
+  return u.toString();
+}
+
+// IPv4/IPv6 ranges that must never be reachable through the CSS proxy.
+function isPrivateAddress(addr: string): boolean {
+  const family = net.isIP(addr);
+  if (family === 4) {
+    const [a, b] = addr.split(".").map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 192 && b === 0) return true; // 192.0.0.0/24 IETF protocol assignments
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+    if (a >= 224) return true; // multicast + reserved
+    return false;
+  }
+  if (family === 6) {
+    const lower = addr.toLowerCase();
+    if (lower === "::" || lower === "::1") return true;
+    // IPv4-mapped (::ffff:10.0.0.1) — test the embedded address
+    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isPrivateAddress(mapped[1]);
+    if (/^f[cd]/.test(lower)) return true; // fc00::/7 unique-local
+    if (/^fe[89ab]/.test(lower)) return true; // fe80::/10 link-local
+    if (lower.startsWith("ff")) return true; // multicast
+    return false;
+  }
+  return true;
+}
+
+// Validate a stylesheet URL before the server fetches it on the UI's behalf.
+//
+// These hrefs come out of the *recorded page*, so they are attacker-influenced
+// by whoever's site was recorded. Require https, reject IP literals, and reject
+// hostnames that resolve into private space. A hostile DNS record could still
+// flip between the check and the fetch; the size cap and the fact that only the
+// stylesheet body (never credentials) is returned keep the blast radius small.
+async function assertProxyableCssUrl(raw: string): Promise<string> {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`Invalid stylesheet URL: ${raw}`);
+  }
+  if (u.protocol !== "https:") {
+    throw new Error("Stylesheet URL must use https");
+  }
   // Strip brackets from IPv6 literals (e.g. "[::1]") before testing.
   const host = u.hostname.replace(/^\[|\]$/g, "");
   if (net.isIP(host) !== 0) {
-    throw new Error("Refusing to fetch a mob file from a raw IP address");
+    throw new Error("Refusing to fetch a stylesheet from a raw IP address");
+  }
+  const resolved = await dns.lookup(host, { all: true });
+  if (resolved.length === 0 || resolved.some((r) => isPrivateAddress(r.address))) {
+    throw new Error(`Refusing to fetch a stylesheet from a non-public host: ${host}`);
   }
   return u.toString();
+}
+
+const MAX_MOB_FILE_BYTES = 128 * 1024 * 1024;
+const MAX_CSS_BYTES = 5 * 1024 * 1024;
+
+// Fetch with a hard ceiling on the response body. Without this a single large
+// (or hostile) response is base64-encoded straight into a JSON-RPC frame.
+async function fetchCapped(url: string, maxBytes: number): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`Response too large: ${declared} bytes (max ${maxBytes})`);
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > maxBytes) {
+    throw new Error(`Response too large: ${buffer.byteLength} bytes (max ${maxBytes})`);
+  }
+  return new Uint8Array(buffer);
+}
+
+// CSP connect-src for the UI resource. Derived from the configured instance so
+// self-hosted deployments aren't pinned to the SaaS domain.
+export function uiConnectDomains(): string[] {
+  const domains = new Set<string>(["*.openreplay.com"]);
+  try {
+    const host = new URL(state.appUrl).hostname;
+    domains.add(host);
+    const parts = host.split(".");
+    if (parts.length > 2) {
+      domains.add(`*.${parts.slice(-2).join(".")}`);
+    }
+  } catch {
+    // state.appUrl is validated on write; ignore anything unparseable
+  }
+  return Array.from(domains);
+}
+
+// Platforms the embedded engine can replay. Mobile recordings need
+// IOSMessageManager and a video track, neither of which this app implements.
+function isMobilePlatform(platform: unknown): boolean {
+  return typeof platform === "string" && /ios|android/i.test(platform);
 }
 
 // Register UI tools
@@ -117,7 +220,7 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           resourceUri,
           visibility: ["model"],
           csp: {
-            connectDomains: ["*.openreplay.com"],
+            connectDomains: uiConnectDomains(),
           },
         },
         examples: [
@@ -226,7 +329,7 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           resourceUri,
           visibility: ["model"],
           csp: {
-            connectDomains: ["*.openreplay.com"],
+            connectDomains: uiConnectDomains(),
           },
         },
         examples: [
@@ -422,7 +525,7 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           resourceUri,
           visibility: ["model"],
           csp: {
-            connectDomains: ["*.openreplay.com"],
+            connectDomains: uiConnectDomains(),
           },
         },
         examples: [
@@ -592,7 +695,7 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           resourceUri,
           visibility: ["model"],
           csp: {
-            connectDomains: [ "*.openreplay.com"],
+            connectDomains: uiConnectDomains(),
           },
         },
         examples: [
@@ -738,7 +841,7 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           resourceUri,
           visibility: ["model"],
           csp: {
-            connectDomains: ["*.openreplay.com"],
+            connectDomains: uiConnectDomains(),
           },
         },
         examples: [
@@ -893,7 +996,7 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           resourceUri,
           visibility: ["model"],
           csp: {
-            connectDomains: ["*.openreplay.com"],
+            connectDomains: uiConnectDomains(),
           },
         },
         examples: [
@@ -1093,11 +1196,24 @@ export function registerUITools(server: McpServer, resourceUri: string) {
         console.error(`[SERVER] Fetching replay metadata for session ${parsed.sessionId}...`);
         const replay = await fetchSessionReplay(siteId, parsed.sessionId);
 
-        // Determine mob file URLs
-        const isMobile = replay.platform?.includes('ios') || replay.platform?.includes('android');
-        const fileUrls: string[] = isMobile
-          ? (replay.videoURL || [])
-          : (replay.domURL || []);
+        // Mobile recordings are a different format (message stream + video
+        // track, replayed by IOSMessageManager). Feeding videoURL to the web
+        // parser yields garbage, so say so instead of rendering a broken player.
+        if (isMobilePlatform(replay.platform)) {
+          const sessionUrl = `${state.appUrl}/${siteId}/session/${parsed.sessionId}`;
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                type: "error",
+                error: `This is a ${replay.platform} session. The embedded player only supports web recordings — open it in the OpenReplay UI instead: ${sessionUrl}`,
+              }),
+            }],
+            isError: true,
+          };
+        }
+
+        const fileUrls: string[] = replay.domURL || [];
 
         if (!fileUrls.length) {
           return {
@@ -1108,6 +1224,9 @@ export function registerUITools(server: McpServer, resourceUri: string) {
 
         console.error(`[SERVER] Found ${fileUrls.length} mob file(s), platform: ${replay.platform || 'web'}`);
 
+        // Only these URLs may be fetched back through _fetch_mob_file
+        allowMobUrls(fileUrls);
+
         // Return metadata + mob file URLs — the UI will fetch and parse them directly
         const result = {
           type: "session_replay",
@@ -1116,6 +1235,9 @@ export function registerUITools(server: McpServer, resourceUri: string) {
           duration: replay.duration,
           startTs: replay.startTs,
           fileUrls,
+          // Present when the instance has file encryption enabled; the UI needs
+          // it to decrypt each mob file before parsing.
+          fileKey: replay.fileKey,
         };
 
         return {
@@ -1166,18 +1288,30 @@ export function registerInternalTools(server: McpServer) {
         }
         console.error(`[SERVER] _refresh_replay_urls: fetching for session ${sessionId}...`);
         const replay = await fetchSessionReplay(siteId, sessionId);
-        const isMobile = replay.platform?.includes('ios') || replay.platform?.includes('android');
-        const fileUrls: string[] = isMobile
-          ? (replay.videoURL || [])
-          : (replay.domURL || []);
+        if (isMobilePlatform(replay.platform)) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: `Unsupported platform for embedded replay: ${replay.platform}` }) }],
+            isError: true,
+          };
+        }
+        const fileUrls: string[] = replay.domURL || [];
         if (!fileUrls.length) {
           return {
             content: [{ type: "text", text: JSON.stringify({ error: "No recording files found" }) }],
             isError: true,
           };
         }
+        allowMobUrls(fileUrls);
         return {
-          content: [{ type: "text", text: JSON.stringify({ fileUrls, startTs: replay.startTs, duration: replay.duration }) }],
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              fileUrls,
+              startTs: replay.startTs,
+              duration: replay.duration,
+              fileKey: replay.fileKey,
+            }),
+          }],
         };
       } catch (err: any) {
         console.error(`[SERVER] _refresh_replay_urls error:`, err);
@@ -1205,29 +1339,63 @@ export function registerInternalTools(server: McpServer) {
         url = assertFetchableMobUrl(args.url as string);
       } catch (err: any) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: err.message }) }],
+          content: [{ type: "text", text: JSON.stringify({ code: "invalid_url", error: err.message }) }],
           isError: true,
         };
       }
       console.error(`[SERVER] _fetch_mob_file: fetching ${url.slice(0, 80)}...`);
       try {
-        const response = await fetch(url);
-        if (!response.ok) {
-          return {
-            content: [{ type: "text", text: JSON.stringify({ error: `HTTP ${response.status}` }) }],
-            isError: true,
-          };
-        }
-        const buffer = await response.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString('base64');
-        console.error(`[SERVER] _fetch_mob_file: fetched ${Math.floor(buffer.byteLength / 1024)}kb`);
+        const bytes = await fetchCapped(url, MAX_MOB_FILE_BYTES);
+        console.error(`[SERVER] _fetch_mob_file: fetched ${Math.floor(bytes.byteLength / 1024)}kb`);
         return {
-          content: [{ type: "text", text: base64 }],
+          content: [{ type: "text", text: Buffer.from(bytes).toString("base64") }],
         };
       } catch (err: any) {
         console.error(`[SERVER] _fetch_mob_file error:`, err);
+        // Signed mob URLs expire; the UI re-requests fresh ones on `expired`
+        // rather than string-matching the message.
+        const expired = /HTTP 40[13]/.test(err.message ?? "");
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: err.message }) }],
+          content: [{
+            type: "text",
+            text: JSON.stringify({ code: expired ? "expired" : "fetch_failed", error: err.message }),
+          }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Proxy external stylesheet fetches for the replay iframe. Separate from
+  // _fetch_mob_file because these URLs come from the recorded page, not from
+  // this server — see assertProxyableCssUrl.
+  server.registerTool(
+    "_fetch_css",
+    {
+      annotations: { readOnlyHint: true, openWorldHint: true },
+      description: "Fetch an external stylesheet by URL and return base64 (internal use by UI only)",
+      inputSchema: {
+        url: z.string().describe("Stylesheet URL"),
+      },
+    },
+    async (args: any) => {
+      let url: string;
+      try {
+        url = await assertProxyableCssUrl(args.url as string);
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ code: "invalid_url", error: err.message }) }],
+          isError: true,
+        };
+      }
+      try {
+        const bytes = await fetchCapped(url, MAX_CSS_BYTES);
+        return {
+          content: [{ type: "text", text: Buffer.from(bytes).toString("base64") }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ code: "fetch_failed", error: err.message }) }],
           isError: true,
         };
       }

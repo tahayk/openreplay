@@ -7,7 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadPersistedState, abortAllPolls } from "./lib/state.js";
-import { registerUITools, registerInternalTools } from "./lib/tools.js";
+import { APP_VERSION } from "./lib/version.js";
+import { registerUITools, registerInternalTools, uiConnectDomains } from "./lib/tools.js";
 
 const __dirname = import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = existsSync(path.join(__dirname, "dist", "index.html"))
@@ -19,7 +20,7 @@ const resourceUri = "ui://openreplay/app";
 console.error("[SERVER] Creating MCP server instance...");
 const server = new McpServer({
   name: "openreplay-mcp-app",
-  version: "1.0.0",
+  version: APP_VERSION,
 });
 console.error("[SERVER] MCP server instance created");
 
@@ -46,7 +47,7 @@ registerAppResource(
         _meta: {
           ui: {
             csp: {
-              connectDomains: ["*.openreplay.com"],
+              connectDomains: uiConnectDomains(),
             },
           },
         },
@@ -69,19 +70,11 @@ async function main() {
   console.error("[SERVER] Connecting to stdio transport...");
   await server.connect(transport);
   console.error("[SERVER] ==========================================");
-  console.error("[SERVER] OpenReplay MCP Server READY on stdio");
-  console.error("[SERVER] Main UI tools:");
-  console.error("[SERVER]   - view_recent_sessions (View list of recent session recordings)");
-  console.error("[SERVER]   - view_chart (View analytics charts)");
-  console.error("[SERVER] Internal tools:");
-  console.error("[SERVER]   - configure_backend");
-  console.error("[SERVER]   - login_browser");
-  console.error("[SERVER]   - complete_login");
-  console.error("[SERVER]   - login_jwt");
-  console.error("[SERVER]   - logout");
-  console.error("[SERVER]   - fetch_chart_data");
-  console.error("[SERVER]   - get_session_replay");
-  console.error("[SERVER]   - get_auth_status");
+  console.error(`[SERVER] OpenReplay MCP Server v${APP_VERSION} READY on stdio`);
+  // Listed from the registry rather than hand-maintained, so the log can't
+  // drift from what's actually registered.
+  const toolNames = Object.keys((server as any)._registeredTools ?? {}).sort();
+  console.error(`[SERVER] Tools (${toolNames.length}): ${toolNames.join(", ")}`);
   console.error(`[SERVER] Resource: ${resourceUri}`);
   console.error("[SERVER] ==========================================");
 }
